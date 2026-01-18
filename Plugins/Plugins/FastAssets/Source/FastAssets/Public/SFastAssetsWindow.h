@@ -12,6 +12,7 @@
 class SEditableTextBox;
 class SWidgetSwitcher;
 class STextBlock;
+struct FSlateBrush;
 
 struct FExternalAssetItem
 {
@@ -22,8 +23,12 @@ struct FExternalAssetItem
 	int64 FileSize;
 	FDateTime ModifiedTime;
 
+	/** Cached thumbnail brush for this asset */
+	const FSlateBrush* ThumbnailBrush = nullptr;
+
 	FExternalAssetItem()
 		: FileSize(0)
+		, ThumbnailBrush(nullptr)
 	{
 	}
 };

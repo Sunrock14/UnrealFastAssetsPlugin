@@ -2,6 +2,7 @@
 
 #include "SAssetTableRow.h"
 #include "FAssetDragDropOp.h"
+#include "FastAssetsThumbnail.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Text/STextBlock.h"
@@ -9,6 +10,41 @@
 #include "Styling/AppStyle.h"
 
 #define LOCTEXT_NAMESPACE "FastAssets"
+
+namespace FastAssetsColors
+{
+	FLinearColor GetColorForAssetType(const FString& AssetType)
+	{
+		if (AssetType == TEXT("Mesh"))
+		{
+			return FLinearColor(0.15f, 0.4f, 0.75f, 1.0f); // Blue
+		}
+		else if (AssetType == TEXT("Sound"))
+		{
+			return FLinearColor(0.2f, 0.65f, 0.2f, 1.0f); // Green
+		}
+		else if (AssetType == TEXT("Texture"))
+		{
+			return FLinearColor(0.75f, 0.3f, 0.55f, 1.0f); // Pink/Magenta
+		}
+		else if (AssetType == TEXT("UAsset"))
+		{
+			return FLinearColor(0.85f, 0.55f, 0.1f, 1.0f); // Orange
+		}
+		else if (AssetType == TEXT("Map"))
+		{
+			return FLinearColor(0.55f, 0.25f, 0.75f, 1.0f); // Purple
+		}
+		else if (AssetType == TEXT("Data"))
+		{
+			return FLinearColor(0.85f, 0.85f, 0.2f, 1.0f); // Yellow
+		}
+		else
+		{
+			return FLinearColor(0.4f, 0.4f, 0.4f, 1.0f); // Gray
+		}
+	}
+}
 
 // ============================================================================
 // SAssetListRow Implementation
@@ -35,20 +71,51 @@ TSharedRef<SWidget> SAssetListRow::GenerateWidgetForColumn(const FName& ColumnNa
 
 	if (ColumnName == TEXT("Icon"))
 	{
+		FLinearColor IconColor = FastAssetsColors::GetColorForAssetType(AssetItem->AssetType);
+
+		// Lazy load thumbnail if not already loaded
+		if (AssetItem->ThumbnailBrush == nullptr)
+		{
+			UE_LOG(LogTemp, Log, TEXT("FastAssets: Lazy loading thumbnail for list row: %s"), *AssetItem->FilePath);
+			AssetItem->ThumbnailBrush = FFastAssetsThumbnail::Get().GetThumbnailBrush(
+				AssetItem->FilePath,
+				AssetItem->AssetType
+			);
+			UE_LOG(LogTemp, Log, TEXT("FastAssets: Thumbnail loaded, brush is %s"), AssetItem->ThumbnailBrush ? TEXT("valid") : TEXT("null"));
+		}
+
+		// Check if we have a real thumbnail (for texture files)
+		if (AssetItem->ThumbnailBrush != nullptr && AssetItem->AssetType == TEXT("Texture"))
+		{
+			return SNew(SBox)
+				.WidthOverride(24)
+				.HeightOverride(24)
+				.HAlign(HAlign_Center)
+				.VAlign(VAlign_Center)
+				[
+					SNew(SImage)
+					.Image(AssetItem->ThumbnailBrush)
+				];
+		}
+
+		// Use colored background with type letter
 		return SNew(SBox)
-			.WidthOverride(20)
-			.HeightOverride(20)
+			.WidthOverride(24)
+			.HeightOverride(24)
 			.HAlign(HAlign_Center)
 			.VAlign(VAlign_Center)
 			[
 				SNew(SBorder)
-				.BorderImage(FAppStyle::GetBrush("ContentBrowser.ColumnViewAssetIcon"))
+				.BorderImage(FAppStyle::GetBrush("WhiteBrush"))
+				.BorderBackgroundColor(IconColor)
 				.HAlign(HAlign_Center)
 				.VAlign(VAlign_Center)
+				.Padding(2.0f)
 				[
 					SNew(STextBlock)
 					.Text(FText::FromString(AssetItem->AssetType.Left(1).ToUpper()))
 					.Font(FCoreStyle::GetDefaultFontStyle("Bold", 10))
+					.ColorAndOpacity(FSlateColor(FLinearColor::White))
 				]
 			];
 	}
@@ -131,6 +198,31 @@ void SAssetTile::Construct(const FArguments& InArgs, const TSharedRef<STableView
 		InOwnerTable
 	);
 
+	// Get color for this asset type
+	FLinearColor TileColor = FLinearColor(0.4f, 0.4f, 0.4f, 1.0f);
+	FString TypeLetter = TEXT("?");
+	bool bHasThumbnail = false;
+
+	if (AssetItem.IsValid())
+	{
+		TileColor = FastAssetsColors::GetColorForAssetType(AssetItem->AssetType);
+		TypeLetter = AssetItem->AssetType.Left(1).ToUpper();
+
+		// Lazy load thumbnail if not already loaded
+		if (AssetItem->ThumbnailBrush == nullptr)
+		{
+			UE_LOG(LogTemp, Log, TEXT("FastAssets: Lazy loading thumbnail for tile: %s"), *AssetItem->FilePath);
+			AssetItem->ThumbnailBrush = FFastAssetsThumbnail::Get().GetThumbnailBrush(
+				AssetItem->FilePath,
+				AssetItem->AssetType
+			);
+			UE_LOG(LogTemp, Log, TEXT("FastAssets: Tile thumbnail loaded, brush is %s"), AssetItem->ThumbnailBrush ? TEXT("valid") : TEXT("null"));
+		}
+
+		bHasThumbnail = (AssetItem->ThumbnailBrush != nullptr && AssetItem->AssetType == TEXT("Texture"));
+		UE_LOG(LogTemp, Log, TEXT("FastAssets: bHasThumbnail = %s for %s"), bHasThumbnail ? TEXT("true") : TEXT("false"), *AssetItem->FileName);
+	}
+
 	ChildSlot
 	[
 		SNew(SBox)
@@ -139,7 +231,7 @@ void SAssetTile::Construct(const FArguments& InArgs, const TSharedRef<STableView
 		[
 			SNew(SVerticalBox)
 
-			// Thumbnail placeholder
+			// Thumbnail
 			+ SVerticalBox::Slot()
 			.AutoHeight()
 			[
@@ -148,13 +240,26 @@ void SAssetTile::Construct(const FArguments& InArgs, const TSharedRef<STableView
 				.HeightOverride(100)
 				[
 					SNew(SBorder)
-					.BorderImage(FAppStyle::GetBrush("ContentBrowser.AssetTileItem.AssetBackground"))
+					.BorderImage(FAppStyle::GetBrush("WhiteBrush"))
+					.BorderBackgroundColor(TileColor)
+					.Padding(4.0f)
 					.HAlign(HAlign_Center)
 					.VAlign(VAlign_Center)
 					[
-						SNew(STextBlock)
-						.Text(AssetItem.IsValid() ? FText::FromString(AssetItem->AssetType.Left(1).ToUpper()) : FText::GetEmpty())
-						.Font(FCoreStyle::GetDefaultFontStyle("Bold", 24))
+						bHasThumbnail ?
+						// Real thumbnail for textures
+						StaticCastSharedRef<SWidget>(
+							SNew(SImage)
+							.Image(AssetItem->ThumbnailBrush)
+						)
+						:
+						// Type letter for other assets
+						StaticCastSharedRef<SWidget>(
+							SNew(STextBlock)
+							.Text(FText::FromString(TypeLetter))
+							.Font(FCoreStyle::GetDefaultFontStyle("Bold", 32))
+							.ColorAndOpacity(FSlateColor(FLinearColor::White))
+						)
 					]
 				]
 			]

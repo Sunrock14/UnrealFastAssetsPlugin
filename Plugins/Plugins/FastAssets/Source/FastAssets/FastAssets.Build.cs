@@ -54,8 +54,9 @@ public class FastAssets : ModuleRules
 				"WorkspaceMenuStructure",
 				"EditorScriptingUtilities",
 				"DeveloperSettings",
-				"ApplicationCore"
-				"ApplicationCore"
+				"ApplicationCore",
+				"ImageWrapper",
+				"RenderCore"
 			}
 			);
 		

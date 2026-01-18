@@ -431,6 +431,7 @@ void SFastAssetsWindow::ScanDirectory(const FString& Path)
 			NewItem->AssetType = DetermineAssetType(Extension);
 			NewItem->FileSize = IFileManager::Get().FileSize(*FilePath);
 			NewItem->ModifiedTime = IFileManager::Get().GetTimeStamp(*FilePath);
+			NewItem->ThumbnailBrush = nullptr; // Will be loaded on demand if needed
 
 			AllAssets.Add(NewItem);
 		}
