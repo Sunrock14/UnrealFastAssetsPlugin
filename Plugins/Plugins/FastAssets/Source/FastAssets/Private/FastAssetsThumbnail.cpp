@@ -5,10 +5,23 @@
 #include "IImageWrapper.h"
 #include "Modules/ModuleManager.h"
 #include "Engine/Texture2D.h"
+#include "Engine/StaticMesh.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Styling/AppStyle.h"
 #include "Styling/SlateStyleRegistry.h"
+// For 3D model thumbnail rendering
+#include "ThumbnailRendering/ThumbnailManager.h"
+#include "ObjectTools.h"
+#include "Factories/FbxFactory.h"
+#include "Factories/FbxImportUI.h"
+#include "Factories/FbxStaticMeshImportData.h"
+#include "UObject/Package.h"
+#include "ImageUtils.h"
+#include "Misc/ObjectThumbnail.h"
+#include "HAL/PlatformFileManager.h"
+#include "AssetToolsModule.h"
+#include "IAssetTools.h"
 
 TUniquePtr<FFastAssetsThumbnail> FFastAssetsThumbnail::Instance = nullptr;
 
@@ -105,28 +118,57 @@ bool FFastAssetsThumbnail::SupportsImageThumbnail(const FString& AssetType) cons
 	return AssetType == TEXT("Texture");
 }
 
+bool FFastAssetsThumbnail::Supports3DModelThumbnail(const FString& AssetType) const
+{
+	return AssetType == TEXT("Mesh");
+}
+
+bool FFastAssetsThumbnail::IsSupportedMeshFormat(const FString& Extension) const
+{
+	FString LowerExt = Extension.ToLower();
+	return LowerExt == TEXT("fbx") ||
+		   LowerExt == TEXT("obj") ||
+		   LowerExt == TEXT("gltf") ||
+		   LowerExt == TEXT("glb");
+}
+
 const FSlateBrush* FFastAssetsThumbnail::GetThumbnailBrush(const FString& FilePath, const FString& AssetType)
 {
 	UE_LOG(LogTemp, Verbose, TEXT("FastAssets: GetThumbnailBrush called for: %s (Type: %s)"), *FilePath, *AssetType);
 
+	// Check cache first (applies to all types)
+	if (TSharedPtr<FSlateBrush>* CachedBrush = ThumbnailCache.Find(FilePath))
+	{
+		if (CachedBrush->IsValid())
+		{
+			return CachedBrush->Get();
+		}
+	}
+
 	// For textures, try to load actual image thumbnail
 	if (SupportsImageThumbnail(AssetType))
 	{
-		// Check cache first
-		if (TSharedPtr<FSlateBrush>* CachedBrush = ThumbnailCache.Find(FilePath))
-		{
-			if (CachedBrush->IsValid())
-			{
-				return CachedBrush->Get();
-			}
-		}
-
 		// Try to load the image
 		TSharedPtr<FSlateBrush> LoadedBrush = LoadImageAsBrush(FilePath);
 		if (LoadedBrush.IsValid())
 		{
 			ThumbnailCache.Add(FilePath, LoadedBrush);
 			return LoadedBrush.Get();
+		}
+	}
+
+	// For 3D models, try to render thumbnail
+	if (Supports3DModelThumbnail(AssetType))
+	{
+		FString Extension = FPaths::GetExtension(FilePath);
+		if (IsSupportedMeshFormat(Extension))
+		{
+			TSharedPtr<FSlateBrush> MeshBrush = Load3DModelAsBrush(FilePath);
+			if (MeshBrush.IsValid())
+			{
+				ThumbnailCache.Add(FilePath, MeshBrush);
+				return MeshBrush.Get();
+			}
 		}
 	}
 
@@ -270,6 +312,247 @@ UTexture2D* FFastAssetsThumbnail::CreateTextureFromImage(const FString& FilePath
 	return nullptr;
 }
 
+TSharedPtr<FSlateBrush> FFastAssetsThumbnail::Load3DModelAsBrush(const FString& FilePath)
+{
+	UE_LOG(LogTemp, Log, TEXT("FastAssets: Loading 3D model thumbnail for: %s"), *FilePath);
+
+	// Check file size limit
+	IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+	int64 FileSize = PlatformFile.FileSize(*FilePath);
+
+	if (FileSize < 0)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FastAssets: Cannot get file size for: %s"), *FilePath);
+		return nullptr;
+	}
+
+	if (FileSize > MaxMeshFileSize)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FastAssets: File too large for thumbnail (%.1f MB > 100 MB): %s"),
+			FileSize / (1024.0 * 1024.0), *FilePath);
+		return nullptr;
+	}
+
+	// Import to transient mesh
+	UStaticMesh* TransientMesh = ImportToTransientMesh(FilePath);
+	if (!TransientMesh)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FastAssets: Failed to import mesh: %s"), *FilePath);
+		return nullptr;
+	}
+
+	// Render thumbnail
+	TSharedPtr<FSlateBrush> ResultBrush = RenderMeshThumbnail(TransientMesh, FilePath);
+
+	// Cleanup transient mesh
+	CleanupTransientMesh(TransientMesh);
+
+	return ResultBrush;
+}
+
+UStaticMesh* FFastAssetsThumbnail::ImportToTransientMesh(const FString& FilePath)
+{
+	UE_LOG(LogTemp, Log, TEXT("FastAssets: Importing to transient mesh: %s"), *FilePath);
+
+	FString Extension = FPaths::GetExtension(FilePath).ToLower();
+
+	// Create unique package name for this import
+	FString FileName = FPaths::GetBaseFilename(FilePath);
+	FString UniquePackageName = FString::Printf(TEXT("/Temp/FastAssets/%s_%d"), *FileName, FMath::Rand());
+
+	// Create transient package
+	UPackage* TransientPackage = CreatePackage(*UniquePackageName);
+	if (!TransientPackage)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FastAssets: Failed to create transient package"));
+		return nullptr;
+	}
+
+	TransientPackage->SetFlags(RF_Transient);
+
+	UStaticMesh* ResultMesh = nullptr;
+
+	if (Extension == TEXT("fbx") || Extension == TEXT("obj"))
+	{
+		// Use FbxFactory for FBX and OBJ files
+		UFbxFactory* FbxFactory = NewObject<UFbxFactory>();
+		FbxFactory->AddToRoot(); // Prevent GC during import
+
+		// Configure import settings for minimal import (just geometry, no materials/textures)
+		UFbxImportUI* ImportUI = FbxFactory->ImportUI;
+		if (ImportUI)
+		{
+			ImportUI->bImportMaterials = false;
+			ImportUI->bImportAnimations = false;
+			ImportUI->bImportAsSkeletal = false;
+			ImportUI->bAutomatedImportShouldDetectType = false;
+			ImportUI->MeshTypeToImport = FBXIT_StaticMesh;
+			ImportUI->bIsObjImport = (Extension == TEXT("obj"));
+
+			// Configure static mesh import data
+			if (ImportUI->StaticMeshImportData)
+			{
+				ImportUI->StaticMeshImportData->bCombineMeshes = true;
+				ImportUI->StaticMeshImportData->bAutoGenerateCollision = false;
+				ImportUI->StaticMeshImportData->bRemoveDegenerates = true;
+				ImportUI->StaticMeshImportData->bBuildReversedIndexBuffer = false;
+			}
+		}
+
+		// Perform import
+		bool bCancelled = false;
+		UObject* ImportedObject = FbxFactory->ImportObject(
+			UStaticMesh::StaticClass(),
+			TransientPackage,
+			FName(*FileName),
+			RF_Transient | RF_Public,
+			FilePath,
+			nullptr,
+			bCancelled
+		);
+
+		FbxFactory->RemoveFromRoot();
+
+		ResultMesh = Cast<UStaticMesh>(ImportedObject);
+	}
+	// Note: GLTF/GLB support may require InterchangeFramework module - not all UE versions have built-in GLTF factory
+
+	if (ResultMesh)
+	{
+		// Mark as transient
+		ResultMesh->SetFlags(RF_Transient);
+
+		// Build mesh for rendering (required for thumbnail)
+		ResultMesh->Build(false);
+
+		UE_LOG(LogTemp, Log, TEXT("FastAssets: Successfully imported mesh: %s"), *FilePath);
+	}
+
+	return ResultMesh;
+}
+
+TSharedPtr<FSlateBrush> FFastAssetsThumbnail::RenderMeshThumbnail(UStaticMesh* Mesh, const FString& FilePath)
+{
+	if (!Mesh)
+	{
+		return nullptr;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("FastAssets: Rendering thumbnail for mesh"));
+
+	// Create thumbnail data
+	FObjectThumbnail NewThumbnail;
+
+	// Use ThumbnailTools to render the thumbnail
+	ThumbnailTools::RenderThumbnail(
+		Mesh,
+		MeshThumbnailSize,
+		MeshThumbnailSize,
+		ThumbnailTools::EThumbnailTextureFlushMode::NeverFlush,
+		nullptr,
+		&NewThumbnail
+	);
+
+	if (NewThumbnail.IsEmpty())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FastAssets: Rendered thumbnail is empty"));
+		return nullptr;
+	}
+
+	// Convert thumbnail to texture
+	UTexture2D* ThumbnailTexture = ConvertThumbnailToTexture(NewThumbnail);
+	if (!ThumbnailTexture)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FastAssets: Failed to convert thumbnail to texture"));
+		return nullptr;
+	}
+
+	// Store texture reference
+	TextureCache.Add(FilePath, ThumbnailTexture);
+
+	// Create brush from texture
+	TSharedPtr<FSlateBrush> NewBrush = MakeShared<FSlateBrush>();
+	NewBrush->SetResourceObject(ThumbnailTexture);
+	NewBrush->ImageSize = FVector2D(MeshThumbnailSize, MeshThumbnailSize);
+	NewBrush->DrawAs = ESlateBrushDrawType::Image;
+	NewBrush->Tiling = ESlateBrushTileType::NoTile;
+
+	UE_LOG(LogTemp, Log, TEXT("FastAssets: Successfully created mesh thumbnail brush"));
+
+	return NewBrush;
+}
+
+UTexture2D* FFastAssetsThumbnail::ConvertThumbnailToTexture(const FObjectThumbnail& Thumbnail)
+{
+	if (Thumbnail.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	int32 Width = Thumbnail.GetImageWidth();
+	int32 Height = Thumbnail.GetImageHeight();
+
+	if (Width <= 0 || Height <= 0)
+	{
+		return nullptr;
+	}
+
+	// Get uncompressed image data
+	const TArray<uint8>& UncompressedData = Thumbnail.GetUncompressedImageData();
+
+	if (UncompressedData.Num() == 0)
+	{
+		return nullptr;
+	}
+
+	// Create texture
+	UTexture2D* Texture = UTexture2D::CreateTransient(Width, Height, PF_B8G8R8A8);
+	if (!Texture)
+	{
+		return nullptr;
+	}
+
+	// Prevent garbage collection
+	Texture->AddToRoot();
+
+	// Copy pixel data
+	void* TextureData = Texture->GetPlatformData()->Mips[0].BulkData.Lock(LOCK_READ_WRITE);
+	FMemory::Memcpy(TextureData, UncompressedData.GetData(), UncompressedData.Num());
+	Texture->GetPlatformData()->Mips[0].BulkData.Unlock();
+
+	// Update resource
+	Texture->UpdateResource();
+
+	return Texture;
+}
+
+void FFastAssetsThumbnail::CleanupTransientMesh(UStaticMesh* Mesh)
+{
+	if (!Mesh)
+	{
+		return;
+	}
+
+	UE_LOG(LogTemp, Verbose, TEXT("FastAssets: Cleaning up transient mesh"));
+
+	// Mark for garbage collection
+	Mesh->ClearFlags(RF_Public | RF_Standalone);
+	Mesh->SetFlags(RF_Transient);
+	Mesh->MarkAsGarbage();
+
+	// Track in pending cleanup list
+	PendingCleanupMeshes.Add(Mesh);
+
+	// Periodically clean up the pending list
+	for (int32 i = PendingCleanupMeshes.Num() - 1; i >= 0; --i)
+	{
+		if (!PendingCleanupMeshes[i].IsValid())
+		{
+			PendingCleanupMeshes.RemoveAt(i);
+		}
+	}
+}
+
 void FFastAssetsThumbnail::ClearCache()
 {
 	ThumbnailCache.Empty();
@@ -283,6 +566,9 @@ void FFastAssetsThumbnail::ClearCache()
 		}
 	}
 	TextureCache.Empty();
+
+	// Clear pending cleanup meshes
+	PendingCleanupMeshes.Empty();
 }
 
 void FFastAssetsThumbnail::PreCacheThumbnails(const TArray<FString>& FilePaths, const TArray<FString>& AssetTypes)
@@ -290,7 +576,7 @@ void FFastAssetsThumbnail::PreCacheThumbnails(const TArray<FString>& FilePaths, 
 	// Pre-cache thumbnails for faster display
 	for (int32 i = 0; i < FilePaths.Num() && i < AssetTypes.Num(); i++)
 	{
-		if (SupportsImageThumbnail(AssetTypes[i]))
+		if (SupportsImageThumbnail(AssetTypes[i]) || Supports3DModelThumbnail(AssetTypes[i]))
 		{
 			GetThumbnailBrush(FilePaths[i], AssetTypes[i]);
 		}

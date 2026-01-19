@@ -84,8 +84,9 @@ TSharedRef<SWidget> SAssetListRow::GenerateWidgetForColumn(const FName& ColumnNa
 			UE_LOG(LogTemp, Log, TEXT("FastAssets: Thumbnail loaded, brush is %s"), AssetItem->ThumbnailBrush ? TEXT("valid") : TEXT("null"));
 		}
 
-		// Check if we have a real thumbnail (for texture files)
-		if (AssetItem->ThumbnailBrush != nullptr && AssetItem->AssetType == TEXT("Texture"))
+		// Check if we have a real thumbnail (for texture and mesh files)
+		if (AssetItem->ThumbnailBrush != nullptr &&
+			(AssetItem->AssetType == TEXT("Texture") || AssetItem->AssetType == TEXT("Mesh")))
 		{
 			return SNew(SBox)
 				.WidthOverride(24)
@@ -219,7 +220,8 @@ void SAssetTile::Construct(const FArguments& InArgs, const TSharedRef<STableView
 			UE_LOG(LogTemp, Log, TEXT("FastAssets: Tile thumbnail loaded, brush is %s"), AssetItem->ThumbnailBrush ? TEXT("valid") : TEXT("null"));
 		}
 
-		bHasThumbnail = (AssetItem->ThumbnailBrush != nullptr && AssetItem->AssetType == TEXT("Texture"));
+		bHasThumbnail = (AssetItem->ThumbnailBrush != nullptr &&
+			(AssetItem->AssetType == TEXT("Texture") || AssetItem->AssetType == TEXT("Mesh")));
 		UE_LOG(LogTemp, Log, TEXT("FastAssets: bHasThumbnail = %s for %s"), bHasThumbnail ? TEXT("true") : TEXT("false"), *AssetItem->FileName);
 	}
 

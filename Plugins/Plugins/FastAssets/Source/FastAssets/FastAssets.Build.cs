@@ -56,7 +56,11 @@ public class FastAssets : ModuleRules
 				"DeveloperSettings",
 				"ApplicationCore",
 				"ImageWrapper",
-				"RenderCore"
+				"RenderCore",
+				// For 3D model thumbnail rendering
+				"RHI",
+				"MeshDescription",
+				"StaticMeshDescription"
 			}
 			);
 		

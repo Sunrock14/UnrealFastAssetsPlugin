@@ -6,6 +6,7 @@
 #include "Styling/SlateBrush.h"
 
 class UTexture2D;
+class UStaticMesh;
 
 /**
  * Manages thumbnail loading and caching for external assets
@@ -28,6 +29,9 @@ public:
 	/** Check if asset type supports image thumbnail */
 	bool SupportsImageThumbnail(const FString& AssetType) const;
 
+	/** Check if asset type supports 3D model thumbnail */
+	bool Supports3DModelThumbnail(const FString& AssetType) const;
+
 	/** Clear thumbnail cache */
 	void ClearCache();
 
@@ -38,11 +42,29 @@ private:
 	/** Load image file as brush */
 	TSharedPtr<FSlateBrush> LoadImageAsBrush(const FString& FilePath);
 
+	/** Load 3D model file and render thumbnail as brush */
+	TSharedPtr<FSlateBrush> Load3DModelAsBrush(const FString& FilePath);
+
+	/** Import FBX/OBJ to a transient UStaticMesh */
+	UStaticMesh* ImportToTransientMesh(const FString& FilePath);
+
+	/** Render mesh thumbnail and return as brush */
+	TSharedPtr<FSlateBrush> RenderMeshThumbnail(UStaticMesh* Mesh, const FString& FilePath);
+
+	/** Convert FObjectThumbnail to UTexture2D */
+	UTexture2D* ConvertThumbnailToTexture(const FObjectThumbnail& Thumbnail);
+
+	/** Cleanup transient mesh after rendering */
+	void CleanupTransientMesh(UStaticMesh* Mesh);
+
 	/** Create texture from image data */
 	UTexture2D* CreateTextureFromImage(const FString& FilePath);
 
 	/** Initialize asset type icons */
 	void InitializeAssetTypeIcons();
+
+	/** Check if file extension is a supported 3D model format */
+	bool IsSupportedMeshFormat(const FString& Extension) const;
 
 private:
 	/** Cached thumbnail brushes (FilePath -> Brush) */
@@ -57,8 +79,17 @@ private:
 	/** Default brush for unknown types */
 	TSharedPtr<FSlateBrush> DefaultBrush;
 
-	/** Thumbnail size */
+	/** Pending meshes to cleanup */
+	TArray<TWeakObjectPtr<UStaticMesh>> PendingCleanupMeshes;
+
+	/** Thumbnail size for images */
 	static const int32 ThumbnailSize = 128;
+
+	/** Thumbnail size for 3D model rendering (higher quality) */
+	static const int32 MeshThumbnailSize = 256;
+
+	/** Maximum file size for 3D model import (100 MB) */
+	static const int64 MaxMeshFileSize = 100 * 1024 * 1024;
 
 	/** Singleton instance */
 	static TUniquePtr<FFastAssetsThumbnail> Instance;
