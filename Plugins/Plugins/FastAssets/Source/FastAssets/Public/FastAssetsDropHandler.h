@@ -7,7 +7,10 @@
 #include "FAssetDragDropOp.h"
 #include "FastAssetImporter.h"
 
-class FFastAssetsDropHandler
+class ILevelEditor;
+class SWidget;
+
+class FFastAssetsDropHandler : public TSharedFromThis<FFastAssetsDropHandler>
 {
 public:
 	FFastAssetsDropHandler();
@@ -39,6 +42,31 @@ private:
 	bool ImportAssetsToProject(const TArray<TSharedPtr<FExternalAssetItem>>& Assets, const FString& DestinationPath);
 
 private:
+	/** Register the viewport drop overlay widget */
+	void RegisterViewportDropHandler();
+
+	/** Unregister the viewport drop overlay widget */
+	void UnregisterViewportDropHandler();
+
+	/** Register content browser drop handler */
+	void RegisterContentBrowserDropHandler();
+
+	/** Unregister content browser drop handler */
+	void UnregisterContentBrowserDropHandler();
+
+	/** Called when a level editor is created */
+	void OnLevelEditorCreated(TSharedPtr<ILevelEditor> LevelEditor);
+
+private:
 	FFastAssetImporter AssetImporter;
 	bool bIsInitialized;
+
+	/** Handle for level editor created delegate */
+	FDelegateHandle LevelEditorCreatedHandle;
+
+	/** Handle for content browser drag-drop delegate */
+	FDelegateHandle ContentBrowserDropHandle;
+
+	/** Weak reference to the viewport overlay widget */
+	TWeakPtr<SWidget> ViewportOverlayWidget;
 };
