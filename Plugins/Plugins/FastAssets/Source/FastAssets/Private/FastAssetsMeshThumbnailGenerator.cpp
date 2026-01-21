@@ -13,9 +13,10 @@
 #include "UObject/Package.h"
 #include "HAL/FileManager.h"
 #include "Containers/Ticker.h"
+#include "Factories/FbxImportUI.h"
+#include "Factories/FbxStaticMeshImportData.h"
 
 TUniquePtr<FFastAssetsMeshThumbnailGenerator> FFastAssetsMeshThumbnailGenerator::Instance = nullptr;
-const FString FFastAssetsMeshThumbnailGenerator::TempFolderPath = TEXT("/Game/_FastAssetsTemp");
 
 FFastAssetsMeshThumbnailGenerator::FFastAssetsMeshThumbnailGenerator()
 	: bIsProcessing(false)
@@ -180,34 +181,87 @@ UStaticMesh* FFastAssetsMeshThumbnailGenerator::ImportToTempPackage(const FStrin
 	// Sanitize asset name
 	AssetName = ObjectTools::SanitizeObjectName(AssetName);
 
-	// Create unique path to avoid collisions
+	// Create unique name to avoid collisions
 	FString UniqueSuffix = FGuid::NewGuid().ToString(EGuidFormats::Short);
-	FString TempPath = TempFolderPath / AssetName + TEXT("_") + UniqueSuffix;
+	FString UniqueAssetName = AssetName + TEXT("_") + UniqueSuffix;
 
-	UE_LOG(LogTemp, Log, TEXT("FastAssets: Importing mesh to temp path: %s"), *TempPath);
+	UE_LOG(LogTemp, Log, TEXT("FastAssets: Importing mesh to transient package: %s"), *UniqueAssetName);
+
+	// Check if this is an FBX file
+	FString Extension = FPaths::GetExtension(FilePath).ToLower();
+	bool bIsFbx = (Extension == TEXT("fbx"));
+
+	// Create a transient package - this won't be saved to disk
+	FString TransientPackageName = FString::Printf(TEXT("/Temp/FastAssets/%s"), *UniqueAssetName);
+	UPackage* TempPackage = CreatePackage(*TransientPackageName);
+	if (!TempPackage)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FastAssets: Failed to create transient package"));
+		return nullptr;
+	}
+	TempPackage->SetFlags(RF_Transient);
 
 	// Get asset tools
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 
-	// Create import data
-	UAutomatedAssetImportData* ImportData = NewObject<UAutomatedAssetImportData>();
-	ImportData->Filenames.Add(FilePath);
-	ImportData->DestinationPath = TempPath;
-	ImportData->bReplaceExisting = true;
-	ImportData->bSkipReadOnly = true;
+	// Configure FBX import options
+	UFbxImportUI* FbxImportUI = nullptr;
+	if (bIsFbx)
+	{
+		FbxImportUI = NewObject<UFbxImportUI>();
+		FbxImportUI->bImportMesh = true;
+		FbxImportUI->bImportTextures = false;
+		FbxImportUI->bImportMaterials = false;
+		FbxImportUI->bImportAnimations = false;
+		FbxImportUI->bIsObjImport = false;
+		FbxImportUI->bAutomatedImportShouldDetectType = false;
+		FbxImportUI->MeshTypeToImport = FBXIT_StaticMesh;
+
+		// Configure static mesh import settings
+		if (FbxImportUI->StaticMeshImportData)
+		{
+			// Auto-generate normals - this suppresses the smoothing group warning
+			FbxImportUI->StaticMeshImportData->NormalImportMethod = FBXNIM_ComputeNormals;
+			FbxImportUI->StaticMeshImportData->NormalGenerationMethod = EFBXNormalGenerationMethod::MikkTSpace;
+			FbxImportUI->StaticMeshImportData->bCombineMeshes = true;
+			FbxImportUI->StaticMeshImportData->bAutoGenerateCollision = false;
+			FbxImportUI->StaticMeshImportData->bRemoveDegenerates = true;
+			FbxImportUI->StaticMeshImportData->bBuildReversedIndexBuffer = false;
+			FbxImportUI->StaticMeshImportData->bGenerateLightmapUVs = false;
+		}
+	}
 
 	// Suppress dialogs during import
 	TGuardValue<bool> UnattendedScriptGuard(GIsRunningUnattendedScript, true);
 
+	// Create import task for better control
+	UAssetImportTask* ImportTask = NewObject<UAssetImportTask>();
+	ImportTask->Filename = FilePath;
+	ImportTask->DestinationPath = FPaths::GetPath(TransientPackageName);
+	ImportTask->DestinationName = UniqueAssetName;
+	ImportTask->bReplaceExisting = true;
+	ImportTask->bAutomated = true;
+	ImportTask->bSave = false;
+
+	if (FbxImportUI)
+	{
+		ImportTask->Options = FbxImportUI;
+	}
+
 	// Import the asset
-	TArray<UObject*> ImportedAssets = AssetTools.ImportAssetsAutomated(ImportData);
+	TArray<UAssetImportTask*> ImportTasks;
+	ImportTasks.Add(ImportTask);
+	AssetTools.ImportAssetTasks(ImportTasks);
 
 	// Find the static mesh in imported assets
-	for (UObject* Asset : ImportedAssets)
+	for (UObject* Asset : ImportTask->GetObjects())
 	{
 		if (UStaticMesh* Mesh = Cast<UStaticMesh>(Asset))
 		{
-			UE_LOG(LogTemp, Log, TEXT("FastAssets: Successfully imported mesh: %s"), *Mesh->GetName());
+			// Mark as transient so it won't be saved
+			Mesh->SetFlags(RF_Transient);
+			Mesh->GetPackage()->SetFlags(RF_Transient);
+			UE_LOG(LogTemp, Log, TEXT("FastAssets: Successfully imported transient mesh: %s"), *Mesh->GetName());
 			return Mesh;
 		}
 	}
@@ -282,33 +336,24 @@ void FFastAssetsMeshThumbnailGenerator::DeleteTempAsset(UObject* Asset)
 		return;
 	}
 
-	UPackage* Package = Asset->GetOutermost();
-	FString PackageName = Package->GetName();
+	FString AssetName = Asset->GetName();
+	UE_LOG(LogTemp, Log, TEXT("FastAssets: Cleaning up transient asset: %s"), *AssetName);
 
-	UE_LOG(LogTemp, Log, TEXT("FastAssets: Deleting temp asset: %s"), *PackageName);
+	// For transient objects, we just need to remove references and let GC handle it
+	// The RF_Transient flag ensures it won't be saved to disk
 
-	// Collect objects to delete
-	TArray<UObject*> ObjectsToDelete;
-	ObjectsToDelete.Add(Asset);
+	// Clear any references
+	Asset->ClearFlags(RF_Standalone);
+	Asset->MarkAsGarbage();
 
-	// Delete the objects
-	int32 NumDeleted = ObjectTools::ForceDeleteObjects(ObjectsToDelete, false);
-
-	if (NumDeleted > 0)
+	// Also mark the package for cleanup
+	if (UPackage* Package = Asset->GetPackage())
 	{
-		UE_LOG(LogTemp, Log, TEXT("FastAssets: Successfully deleted temp asset"));
-	}
-	else
-	{
-		UE_LOG(LogTemp, Warning, TEXT("FastAssets: Failed to delete temp asset: %s"), *PackageName);
+		Package->ClearFlags(RF_Standalone);
+		Package->MarkAsGarbage();
 	}
 
-	// Also try to delete the package file from disk if it exists
-	FString PackagePath = FPackageName::LongPackageNameToFilename(PackageName, FPackageName::GetAssetPackageExtension());
-	if (FPaths::FileExists(PackagePath))
-	{
-		IFileManager::Get().Delete(*PackagePath);
-	}
+	UE_LOG(LogTemp, Log, TEXT("FastAssets: Transient asset marked for garbage collection"));
 }
 
 void FFastAssetsMeshThumbnailGenerator::ClearCache()

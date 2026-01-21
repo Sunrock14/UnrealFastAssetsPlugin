@@ -96,9 +96,6 @@ private:
 	/** Thumbnail size */
 	static const int32 ThumbnailSize = 128;
 
-	/** Temp folder path for mesh imports */
-	static const FString TempFolderPath;
-
 	/** Singleton instance */
 	static TUniquePtr<FFastAssetsMeshThumbnailGenerator> Instance;
 };
