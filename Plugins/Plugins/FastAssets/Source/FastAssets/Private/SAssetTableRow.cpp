@@ -60,6 +60,21 @@ void SAssetListRow::Construct(const FArguments& InArgs, const TSharedRef<STableV
 			.Padding(FMargin(0.0f, 2.0f)),
 		InOwnerTable
 	);
+
+	// Subscribe to thumbnail ready events for mesh types
+	if (AssetItem.IsValid() && AssetItem->AssetType == TEXT("Mesh"))
+	{
+		ThumbnailReadyHandle = FFastAssetsThumbnail::Get().OnThumbnailReady.AddRaw(
+			this, &SAssetListRow::OnThumbnailUpdated);
+	}
+}
+
+SAssetListRow::~SAssetListRow()
+{
+	if (ThumbnailReadyHandle.IsValid())
+	{
+		FFastAssetsThumbnail::Get().OnThumbnailReady.Remove(ThumbnailReadyHandle);
+	}
 }
 
 TSharedRef<SWidget> SAssetListRow::GenerateWidgetForColumn(const FName& ColumnName)
@@ -84,8 +99,12 @@ TSharedRef<SWidget> SAssetListRow::GenerateWidgetForColumn(const FName& ColumnNa
 			UE_LOG(LogTemp, Log, TEXT("FastAssets: Thumbnail loaded, brush is %s"), AssetItem->ThumbnailBrush ? TEXT("valid") : TEXT("null"));
 		}
 
-		// Check if we have a real thumbnail (for texture files)
-		if (AssetItem->ThumbnailBrush != nullptr && AssetItem->AssetType == TEXT("Texture"))
+		// Check if we have a real thumbnail (for texture files or mesh files with generated thumbnail)
+		bool bHasThumbnail = (AssetItem->ThumbnailBrush != nullptr) &&
+			(AssetItem->AssetType == TEXT("Texture") ||
+			 (AssetItem->AssetType == TEXT("Mesh") && !FFastAssetsThumbnail::Get().IsThumbnailPending(AssetItem->FilePath)));
+
+		if (bHasThumbnail)
 		{
 			return SNew(SBox)
 				.WidthOverride(24)
@@ -183,6 +202,21 @@ FString SAssetListRow::FormatFileSize(int64 SizeInBytes) const
 	}
 }
 
+void SAssetListRow::OnThumbnailUpdated(const FString& FilePath)
+{
+	if (AssetItem.IsValid() && AssetItem->FilePath == FilePath)
+	{
+		// Update the cached brush
+		AssetItem->ThumbnailBrush = FFastAssetsThumbnail::Get().GetThumbnailBrush(
+			AssetItem->FilePath, AssetItem->AssetType);
+
+		// Request widget refresh
+		Invalidate(EInvalidateWidget::Paint);
+
+		UE_LOG(LogTemp, Log, TEXT("FastAssets: List row thumbnail updated for: %s"), *FilePath);
+	}
+}
+
 // ============================================================================
 // SAssetTile Implementation
 // ============================================================================
@@ -191,6 +225,7 @@ void SAssetTile::Construct(const FArguments& InArgs, const TSharedRef<STableView
 {
 	AssetItem = InArgs._AssetItem;
 	OnDragDetectedDelegate = InArgs._OnDragDetected;
+	OwnerTable = InOwnerTable;
 
 	STableRow<TSharedPtr<FExternalAssetItem>>::Construct(
 		STableRow<TSharedPtr<FExternalAssetItem>>::FArguments()
@@ -198,6 +233,41 @@ void SAssetTile::Construct(const FArguments& InArgs, const TSharedRef<STableView
 		InOwnerTable
 	);
 
+	// Subscribe to thumbnail ready events for mesh types
+	if (AssetItem.IsValid() && AssetItem->AssetType == TEXT("Mesh"))
+	{
+		ThumbnailReadyHandle = FFastAssetsThumbnail::Get().OnThumbnailReady.AddRaw(
+			this, &SAssetTile::OnThumbnailUpdated);
+	}
+
+	RebuildTileContent();
+}
+
+SAssetTile::~SAssetTile()
+{
+	if (ThumbnailReadyHandle.IsValid())
+	{
+		FFastAssetsThumbnail::Get().OnThumbnailReady.Remove(ThumbnailReadyHandle);
+	}
+}
+
+void SAssetTile::OnThumbnailUpdated(const FString& FilePath)
+{
+	if (AssetItem.IsValid() && AssetItem->FilePath == FilePath)
+	{
+		// Update the cached brush
+		AssetItem->ThumbnailBrush = FFastAssetsThumbnail::Get().GetThumbnailBrush(
+			AssetItem->FilePath, AssetItem->AssetType);
+
+		// Rebuild the tile content with the new thumbnail
+		RebuildTileContent();
+
+		UE_LOG(LogTemp, Log, TEXT("FastAssets: Tile thumbnail updated for: %s"), *FilePath);
+	}
+}
+
+void SAssetTile::RebuildTileContent()
+{
 	// Get color for this asset type
 	FLinearColor TileColor = FLinearColor(0.4f, 0.4f, 0.4f, 1.0f);
 	FString TypeLetter = TEXT("?");
@@ -219,7 +289,11 @@ void SAssetTile::Construct(const FArguments& InArgs, const TSharedRef<STableView
 			UE_LOG(LogTemp, Log, TEXT("FastAssets: Tile thumbnail loaded, brush is %s"), AssetItem->ThumbnailBrush ? TEXT("valid") : TEXT("null"));
 		}
 
-		bHasThumbnail = (AssetItem->ThumbnailBrush != nullptr && AssetItem->AssetType == TEXT("Texture"));
+		// Check if we have a real thumbnail (for texture files or mesh files with generated thumbnail)
+		bHasThumbnail = (AssetItem->ThumbnailBrush != nullptr) &&
+			(AssetItem->AssetType == TEXT("Texture") ||
+			 (AssetItem->AssetType == TEXT("Mesh") && !FFastAssetsThumbnail::Get().IsThumbnailPending(AssetItem->FilePath)));
+
 		UE_LOG(LogTemp, Log, TEXT("FastAssets: bHasThumbnail = %s for %s"), bHasThumbnail ? TEXT("true") : TEXT("false"), *AssetItem->FileName);
 	}
 
@@ -247,13 +321,13 @@ void SAssetTile::Construct(const FArguments& InArgs, const TSharedRef<STableView
 					.VAlign(VAlign_Center)
 					[
 						bHasThumbnail ?
-						// Real thumbnail for textures
+						// Real thumbnail for textures and meshes
 						StaticCastSharedRef<SWidget>(
 							SNew(SImage)
 							.Image(AssetItem->ThumbnailBrush)
 						)
 						:
-						// Type letter for other assets
+						// Type letter for other assets or loading state
 						StaticCastSharedRef<SWidget>(
 							SNew(STextBlock)
 							.Text(FText::FromString(TypeLetter))

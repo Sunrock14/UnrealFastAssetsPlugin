@@ -1,6 +1,7 @@
 // Copyright Ismail Faruk Kocademir. All Rights Reserved.
 
 #include "FastAssetsThumbnail.h"
+#include "FastAssetsMeshThumbnailGenerator.h"
 #include "IImageWrapperModule.h"
 #include "IImageWrapper.h"
 #include "Modules/ModuleManager.h"
@@ -15,6 +16,7 @@ TUniquePtr<FFastAssetsThumbnail> FFastAssetsThumbnail::Instance = nullptr;
 FFastAssetsThumbnail::FFastAssetsThumbnail()
 {
 	InitializeAssetTypeIcons();
+	InitializeLoadingPlaceholder();
 }
 
 FFastAssetsThumbnail::~FFastAssetsThumbnail()
@@ -100,33 +102,82 @@ void FFastAssetsThumbnail::InitializeAssetTypeIcons()
 	}
 }
 
+void FFastAssetsThumbnail::InitializeLoadingPlaceholder()
+{
+	// Create a loading placeholder brush - dark gray with slight animation hint
+	LoadingPlaceholderBrush = MakeShared<FSlateBrush>();
+	*LoadingPlaceholderBrush = *FAppStyle::GetBrush("WhiteBrush");
+	LoadingPlaceholderBrush->TintColor = FSlateColor(FLinearColor(0.2f, 0.25f, 0.3f, 1.0f));
+	LoadingPlaceholderBrush->ImageSize = FVector2D(ThumbnailSize, ThumbnailSize);
+}
+
 bool FFastAssetsThumbnail::SupportsImageThumbnail(const FString& AssetType) const
 {
 	return AssetType == TEXT("Texture");
+}
+
+bool FFastAssetsThumbnail::SupportsMeshThumbnail(const FString& AssetType) const
+{
+	return AssetType == TEXT("Mesh");
+}
+
+const FSlateBrush* FFastAssetsThumbnail::GetLoadingPlaceholderBrush() const
+{
+	return LoadingPlaceholderBrush.Get();
+}
+
+bool FFastAssetsThumbnail::IsThumbnailPending(const FString& FilePath) const
+{
+	return PendingThumbnails.Contains(FilePath);
 }
 
 const FSlateBrush* FFastAssetsThumbnail::GetThumbnailBrush(const FString& FilePath, const FString& AssetType)
 {
 	UE_LOG(LogTemp, Verbose, TEXT("FastAssets: GetThumbnailBrush called for: %s (Type: %s)"), *FilePath, *AssetType);
 
+	// Check cache first for any type
+	if (TSharedPtr<FSlateBrush>* CachedBrush = ThumbnailCache.Find(FilePath))
+	{
+		if (CachedBrush->IsValid())
+		{
+			return CachedBrush->Get();
+		}
+	}
+
 	// For textures, try to load actual image thumbnail
 	if (SupportsImageThumbnail(AssetType))
 	{
-		// Check cache first
-		if (TSharedPtr<FSlateBrush>* CachedBrush = ThumbnailCache.Find(FilePath))
-		{
-			if (CachedBrush->IsValid())
-			{
-				return CachedBrush->Get();
-			}
-		}
-
 		// Try to load the image
 		TSharedPtr<FSlateBrush> LoadedBrush = LoadImageAsBrush(FilePath);
 		if (LoadedBrush.IsValid())
 		{
 			ThumbnailCache.Add(FilePath, LoadedBrush);
 			return LoadedBrush.Get();
+		}
+	}
+
+	// For meshes, request async thumbnail generation
+	if (SupportsMeshThumbnail(AssetType))
+	{
+		FString Extension = FPaths::GetExtension(FilePath);
+		if (FFastAssetsMeshThumbnailGenerator::Get().SupportsMeshThumbnail(Extension))
+		{
+			// Check if already pending
+			if (!PendingThumbnails.Contains(FilePath))
+			{
+				PendingThumbnails.Add(FilePath);
+				UE_LOG(LogTemp, Log, TEXT("FastAssets: Requesting mesh thumbnail for: %s"), *FilePath);
+
+				// Request async thumbnail generation
+				FFastAssetsMeshThumbnailGenerator::Get().RequestThumbnail(FilePath,
+					[this, FilePath](UTexture2D* Thumbnail)
+					{
+						OnMeshThumbnailGenerated(FilePath, Thumbnail);
+					});
+			}
+
+			// Return loading placeholder while generating
+			return GetLoadingPlaceholderBrush();
 		}
 	}
 
@@ -270,9 +321,52 @@ UTexture2D* FFastAssetsThumbnail::CreateTextureFromImage(const FString& FilePath
 	return nullptr;
 }
 
+void FFastAssetsThumbnail::OnMeshThumbnailGenerated(const FString& FilePath, UTexture2D* Thumbnail)
+{
+	// Remove from pending
+	PendingThumbnails.Remove(FilePath);
+
+	if (Thumbnail)
+	{
+		// Create brush from texture and cache it
+		TSharedPtr<FSlateBrush> NewBrush = CreateBrushFromTexture(Thumbnail);
+		if (NewBrush.IsValid())
+		{
+			ThumbnailCache.Add(FilePath, NewBrush);
+			TextureCache.Add(FilePath, Thumbnail);
+
+			UE_LOG(LogTemp, Log, TEXT("FastAssets: Mesh thumbnail ready for: %s"), *FilePath);
+
+			// Broadcast that thumbnail is ready
+			OnThumbnailReady.Broadcast(FilePath);
+		}
+	}
+	else
+	{
+		UE_LOG(LogTemp, Warning, TEXT("FastAssets: Failed to generate mesh thumbnail for: %s"), *FilePath);
+	}
+}
+
+TSharedPtr<FSlateBrush> FFastAssetsThumbnail::CreateBrushFromTexture(UTexture2D* Texture)
+{
+	if (!Texture)
+	{
+		return nullptr;
+	}
+
+	TSharedPtr<FSlateBrush> NewBrush = MakeShared<FSlateBrush>();
+	NewBrush->SetResourceObject(Texture);
+	NewBrush->ImageSize = FVector2D(ThumbnailSize, ThumbnailSize);
+	NewBrush->DrawAs = ESlateBrushDrawType::Image;
+	NewBrush->Tiling = ESlateBrushTileType::NoTile;
+
+	return NewBrush;
+}
+
 void FFastAssetsThumbnail::ClearCache()
 {
 	ThumbnailCache.Empty();
+	PendingThumbnails.Empty();
 
 	// Remove textures from root before clearing
 	for (auto& Pair : TextureCache)
@@ -283,6 +377,9 @@ void FFastAssetsThumbnail::ClearCache()
 		}
 	}
 	TextureCache.Empty();
+
+	// Also clear mesh thumbnail generator cache
+	FFastAssetsMeshThumbnailGenerator::Get().ClearCache();
 }
 
 void FFastAssetsThumbnail::PreCacheThumbnails(const TArray<FString>& FilePaths, const TArray<FString>& AssetTypes)

@@ -20,6 +20,7 @@ public:
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs, const TSharedRef<STableViewBase>& InOwnerTable);
+	virtual ~SAssetListRow();
 
 	virtual TSharedRef<SWidget> GenerateWidgetForColumn(const FName& ColumnName) override;
 
@@ -28,10 +29,12 @@ public:
 
 private:
 	FString FormatFileSize(int64 SizeInBytes) const;
+	void OnThumbnailUpdated(const FString& FilePath);
 
 private:
 	TSharedPtr<FExternalAssetItem> AssetItem;
 	FOnAssetDragDetected OnDragDetectedDelegate;
+	FDelegateHandle ThumbnailReadyHandle;
 };
 
 /**
@@ -46,11 +49,18 @@ public:
 	SLATE_END_ARGS()
 
 	void Construct(const FArguments& InArgs, const TSharedRef<STableViewBase>& InOwnerTable);
+	virtual ~SAssetTile();
 
 	virtual FReply OnMouseButtonDown(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override;
 	virtual FReply OnDragDetected(const FGeometry& MyGeometry, const FPointerEvent& MouseEvent) override;
 
 private:
+	void OnThumbnailUpdated(const FString& FilePath);
+	void RebuildTileContent();
+
+private:
 	TSharedPtr<FExternalAssetItem> AssetItem;
 	FOnAssetDragDetected OnDragDetectedDelegate;
+	FDelegateHandle ThumbnailReadyHandle;
+	TSharedPtr<STableViewBase> OwnerTable;
 };
