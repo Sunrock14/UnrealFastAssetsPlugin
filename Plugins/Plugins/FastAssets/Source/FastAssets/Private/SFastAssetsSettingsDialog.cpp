@@ -195,6 +195,31 @@ TSharedRef<SWidget> SFastAssetsSettingsDialog::ConstructGeneralSection()
 			]
 		]
 
+		// Disable Thumbnails
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(0.0f, 4.0f)
+		[
+			SNew(SHorizontalBox)
+
+			+ SHorizontalBox::Slot()
+			.FillWidth(0.4f)
+			.VAlign(VAlign_Center)
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("DisableThumbnails", "Disable Thumbnails"))
+				.ToolTipText(LOCTEXT("DisableThumbnailsTooltip", "Disable thumbnail generation for faster list performance. Shows colored type icons instead."))
+			]
+
+			+ SHorizontalBox::Slot()
+			.FillWidth(0.6f)
+			[
+				SNew(SCheckBox)
+				.IsChecked_Lambda([this]() { return bTempDisableThumbnails ? ECheckBoxState::Checked : ECheckBoxState::Unchecked; })
+				.OnCheckStateChanged_Lambda([this](ECheckBoxState NewState) { bTempDisableThumbnails = (NewState == ECheckBoxState::Checked); })
+			]
+		]
+
 		// Remember Last Path
 		+ SVerticalBox::Slot()
 		.AutoHeight()
@@ -514,6 +539,7 @@ void SFastAssetsSettingsDialog::LoadSettings()
 
 	TempViewMode = static_cast<int32>(Settings->DefaultViewMode);
 	TempThumbnailSize = static_cast<int32>(Settings->ThumbnailSize);
+	bTempDisableThumbnails = Settings->bDisableThumbnails;
 	TempDuplicateHandling = static_cast<int32>(Settings->DuplicateHandling);
 	bTempRememberLastPath = Settings->bRememberLastPath;
 	bTempAutoImportOnDrop = Settings->bAutoImportOnDrop;
@@ -533,6 +559,7 @@ void SFastAssetsSettingsDialog::ApplySettings()
 
 	Settings->DefaultViewMode = static_cast<EFastAssetsDefaultView>(TempViewMode);
 	Settings->ThumbnailSize = static_cast<EFastAssetsThumbnailSize>(TempThumbnailSize);
+	Settings->bDisableThumbnails = bTempDisableThumbnails;
 	Settings->DuplicateHandling = static_cast<EFastAssetsDuplicateHandling>(TempDuplicateHandling);
 	Settings->bRememberLastPath = bTempRememberLastPath;
 	Settings->bAutoImportOnDrop = bTempAutoImportOnDrop;

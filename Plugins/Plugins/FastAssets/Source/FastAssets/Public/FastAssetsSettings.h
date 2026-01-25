@@ -88,6 +88,10 @@ public:
 	UPROPERTY(config, EditAnywhere, Category = "General", meta = (DisplayName = "Thumbnail Size"))
 	EFastAssetsThumbnailSize ThumbnailSize;
 
+	/** Disable thumbnail generation for faster list performance */
+	UPROPERTY(config, EditAnywhere, Category = "Performance", meta = (DisplayName = "Disable Thumbnails"))
+	bool bDisableThumbnails;
+
 	/** Remember and restore the last browsed folder path */
 	UPROPERTY(config, EditAnywhere, Category = "General", meta = (DisplayName = "Remember Last Path"))
 	bool bRememberLastPath;

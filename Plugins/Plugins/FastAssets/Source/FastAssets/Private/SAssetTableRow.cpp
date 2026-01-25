@@ -3,6 +3,7 @@
 #include "SAssetTableRow.h"
 #include "FAssetDragDropOp.h"
 #include "FastAssetsThumbnail.h"
+#include "FastAssetsSettings.h"
 #include "Widgets/Layout/SBox.h"
 #include "Widgets/Layout/SBorder.h"
 #include "Widgets/Text/STextBlock.h"
@@ -88,21 +89,28 @@ TSharedRef<SWidget> SAssetListRow::GenerateWidgetForColumn(const FName& ColumnNa
 	{
 		FLinearColor IconColor = FastAssetsColors::GetColorForAssetType(AssetItem->AssetType);
 
-		// Lazy load thumbnail if not already loaded
-		if (AssetItem->ThumbnailBrush == nullptr)
-		{
-			UE_LOG(LogTemp, Log, TEXT("FastAssets: Lazy loading thumbnail for list row: %s"), *AssetItem->FilePath);
-			AssetItem->ThumbnailBrush = FFastAssetsThumbnail::Get().GetThumbnailBrush(
-				AssetItem->FilePath,
-				AssetItem->AssetType
-			);
-			UE_LOG(LogTemp, Log, TEXT("FastAssets: Thumbnail loaded, brush is %s"), AssetItem->ThumbnailBrush ? TEXT("valid") : TEXT("null"));
-		}
+		// Check if thumbnails are disabled in settings
+		bool bThumbnailsDisabled = UFastAssetsSettings::Get()->bDisableThumbnails;
+		bool bHasThumbnail = false;
 
-		// Check if we have a real thumbnail (for texture files or mesh files with generated thumbnail)
-		bool bHasThumbnail = (AssetItem->ThumbnailBrush != nullptr) &&
-			(AssetItem->AssetType == TEXT("Texture") ||
-			 (AssetItem->AssetType == TEXT("Mesh") && !FFastAssetsThumbnail::Get().IsThumbnailPending(AssetItem->FilePath)));
+		if (!bThumbnailsDisabled)
+		{
+			// Lazy load thumbnail if not already loaded
+			if (AssetItem->ThumbnailBrush == nullptr)
+			{
+				UE_LOG(LogTemp, Log, TEXT("FastAssets: Lazy loading thumbnail for list row: %s"), *AssetItem->FilePath);
+				AssetItem->ThumbnailBrush = FFastAssetsThumbnail::Get().GetThumbnailBrush(
+					AssetItem->FilePath,
+					AssetItem->AssetType
+				);
+				UE_LOG(LogTemp, Log, TEXT("FastAssets: Thumbnail loaded, brush is %s"), AssetItem->ThumbnailBrush ? TEXT("valid") : TEXT("null"));
+			}
+
+			// Check if we have a real thumbnail (for texture files or mesh files with generated thumbnail)
+			bHasThumbnail = (AssetItem->ThumbnailBrush != nullptr) &&
+				(AssetItem->AssetType == TEXT("Texture") ||
+				 (AssetItem->AssetType == TEXT("Mesh") && !FFastAssetsThumbnail::Get().IsThumbnailPending(AssetItem->FilePath)));
+		}
 
 		if (bHasThumbnail)
 		{
@@ -273,28 +281,34 @@ void SAssetTile::RebuildTileContent()
 	FString TypeLetter = TEXT("?");
 	bool bHasThumbnail = false;
 
+	// Check if thumbnails are disabled in settings
+	bool bThumbnailsDisabled = UFastAssetsSettings::Get()->bDisableThumbnails;
+
 	if (AssetItem.IsValid())
 	{
 		TileColor = FastAssetsColors::GetColorForAssetType(AssetItem->AssetType);
 		TypeLetter = AssetItem->AssetType.Left(1).ToUpper();
 
-		// Lazy load thumbnail if not already loaded
-		if (AssetItem->ThumbnailBrush == nullptr)
+		if (!bThumbnailsDisabled)
 		{
-			UE_LOG(LogTemp, Log, TEXT("FastAssets: Lazy loading thumbnail for tile: %s"), *AssetItem->FilePath);
-			AssetItem->ThumbnailBrush = FFastAssetsThumbnail::Get().GetThumbnailBrush(
-				AssetItem->FilePath,
-				AssetItem->AssetType
-			);
-			UE_LOG(LogTemp, Log, TEXT("FastAssets: Tile thumbnail loaded, brush is %s"), AssetItem->ThumbnailBrush ? TEXT("valid") : TEXT("null"));
+			// Lazy load thumbnail if not already loaded
+			if (AssetItem->ThumbnailBrush == nullptr)
+			{
+				UE_LOG(LogTemp, Log, TEXT("FastAssets: Lazy loading thumbnail for tile: %s"), *AssetItem->FilePath);
+				AssetItem->ThumbnailBrush = FFastAssetsThumbnail::Get().GetThumbnailBrush(
+					AssetItem->FilePath,
+					AssetItem->AssetType
+				);
+				UE_LOG(LogTemp, Log, TEXT("FastAssets: Tile thumbnail loaded, brush is %s"), AssetItem->ThumbnailBrush ? TEXT("valid") : TEXT("null"));
+			}
+
+			// Check if we have a real thumbnail (for texture files or mesh files with generated thumbnail)
+			bHasThumbnail = (AssetItem->ThumbnailBrush != nullptr) &&
+				(AssetItem->AssetType == TEXT("Texture") ||
+				 (AssetItem->AssetType == TEXT("Mesh") && !FFastAssetsThumbnail::Get().IsThumbnailPending(AssetItem->FilePath)));
+
+			UE_LOG(LogTemp, Log, TEXT("FastAssets: bHasThumbnail = %s for %s"), bHasThumbnail ? TEXT("true") : TEXT("false"), *AssetItem->FileName);
 		}
-
-		// Check if we have a real thumbnail (for texture files or mesh files with generated thumbnail)
-		bHasThumbnail = (AssetItem->ThumbnailBrush != nullptr) &&
-			(AssetItem->AssetType == TEXT("Texture") ||
-			 (AssetItem->AssetType == TEXT("Mesh") && !FFastAssetsThumbnail::Get().IsThumbnailPending(AssetItem->FilePath)));
-
-		UE_LOG(LogTemp, Log, TEXT("FastAssets: bHasThumbnail = %s for %s"), bHasThumbnail ? TEXT("true") : TEXT("false"), *AssetItem->FileName);
 	}
 
 	ChildSlot

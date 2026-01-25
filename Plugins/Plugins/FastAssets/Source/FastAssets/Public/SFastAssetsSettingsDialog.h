@@ -60,6 +60,7 @@ private:
 	// Temporary values (applied on OK/Apply)
 	int32 TempViewMode;
 	int32 TempThumbnailSize;
+	bool bTempDisableThumbnails;
 	int32 TempDuplicateHandling;
 	bool bTempRememberLastPath;
 	bool bTempAutoImportOnDrop;

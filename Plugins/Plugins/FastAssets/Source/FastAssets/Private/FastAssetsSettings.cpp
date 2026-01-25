@@ -9,6 +9,7 @@ UFastAssetsSettings::UFastAssetsSettings()
 	// General defaults
 	DefaultViewMode = EFastAssetsDefaultView::Grid;
 	ThumbnailSize = EFastAssetsThumbnailSize::Medium;
+	bDisableThumbnails = false;
 	bRememberLastPath = true;
 	LastBrowsedPath = TEXT("");
 	RecentPathsCount = 10;
@@ -102,6 +103,7 @@ void UFastAssetsSettings::ResetToDefaults()
 	// General
 	DefaultViewMode = EFastAssetsDefaultView::Grid;
 	ThumbnailSize = EFastAssetsThumbnailSize::Medium;
+	bDisableThumbnails = false;
 	bRememberLastPath = true;
 	RecentPathsCount = 10;
 	RecentPaths.Empty();
